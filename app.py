@@ -1,8 +1,10 @@
 import sqlite3
+import zipfile
 from dataclasses import dataclass
 from datetime import date, datetime
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
+from xml.sax.saxutils import escape
 
 DB_PATH = "zikr_desktop.db"
 
@@ -98,6 +100,81 @@ class ZikrRepository:
         self.conn.commit()
 
 
+def write_simple_xlsx(headers: list[str], rows: list[list[str]], output_path: str) -> None:
+    def column_name(index: int) -> str:
+        name = ""
+        while index > 0:
+            index, rem = divmod(index - 1, 26)
+            name = chr(65 + rem) + name
+        return name
+
+    def build_sheet_xml() -> str:
+        all_rows = [headers] + rows
+        row_xml_parts: list[str] = []
+        for row_idx, row_values in enumerate(all_rows, start=1):
+            cell_xml_parts: list[str] = []
+            for col_idx, value in enumerate(row_values, start=1):
+                ref = f"{column_name(col_idx)}{row_idx}"
+                safe_value = escape(str(value))
+                cell_xml_parts.append(
+                    f'<c r="{ref}" t="inlineStr"><is><t xml:space="preserve">{safe_value}</t></is></c>'
+                )
+            row_xml_parts.append(f'<row r="{row_idx}">' + "".join(cell_xml_parts) + "</row>")
+
+        return (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+            '<sheetData>'
+            + "".join(row_xml_parts)
+            + "</sheetData></worksheet>"
+        )
+
+    content_types_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/xl/workbook.xml" '
+        'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+        '<Override PartName="/xl/worksheets/sheet1.xml" '
+        'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+        '</Types>'
+    )
+
+    rels_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" '
+        'Target="xl/workbook.xml"/>'
+        '</Relationships>'
+    )
+
+    workbook_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+        '<sheets><sheet name="Zikrlar" sheetId="1" r:id="rId1"/></sheets>'
+        '</workbook>'
+    )
+
+    workbook_rels_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" '
+        'Target="worksheets/sheet1.xml"/>'
+        '</Relationships>'
+    )
+
+    with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED) as xlsx:
+        xlsx.writestr("[Content_Types].xml", content_types_xml)
+        xlsx.writestr("_rels/.rels", rels_xml)
+        xlsx.writestr("xl/workbook.xml", workbook_xml)
+        xlsx.writestr("xl/_rels/workbook.xml.rels", workbook_rels_xml)
+        xlsx.writestr("xl/worksheets/sheet1.xml", build_sheet_xml())
+
+
 class ZikrForm(tk.Toplevel):
     def __init__(self, parent, on_save, item: ZikrItem | None = None):
         super().__init__(parent)
@@ -185,6 +262,7 @@ class ZikrDesktopApp(tk.Tk):
         ttk.Button(btns, text="+ Yangi", command=self.add_dialog).pack(side="left", padx=4)
         ttk.Button(btns, text="Tahrirlash", command=self.edit_dialog).pack(side="left", padx=4)
         ttk.Button(btns, text="O'chirish", command=self.delete_selected).pack(side="left", padx=4)
+        ttk.Button(btns, text="Excelga export", command=self.export_to_excel).pack(side="left", padx=4)
 
         right = ttk.Frame(self, padding=10)
         right.grid(row=0, column=1, sticky="nsew")
@@ -215,6 +293,47 @@ class ZikrDesktopApp(tk.Tk):
             current = self.repo.get_progress(item.id)
             progress = f"{min(current, item.target_count)}/{item.target_count}"
             self.tree.insert("", "end", iid=str(item.id), values=(item.name, item.target_count, progress))
+
+    def export_to_excel(self):
+        items = self.repo.list_zikr()
+        if not items:
+            messagebox.showinfo("Eslatma", "Export qilish uchun zikrlar mavjud emas.")
+            return
+
+        day = date.today().isoformat()
+        rows: list[list[str]] = []
+        for item in items:
+            current = self.repo.get_progress(item.id, day)
+            rows.append(
+                [
+                    item.name,
+                    item.text,
+                    str(item.target_count),
+                    str(min(current, item.target_count)),
+                    f"{min(current, item.target_count)}/{item.target_count}",
+                    day,
+                ]
+            )
+
+        output_path = filedialog.asksaveasfilename(
+            title="Excel faylni saqlash",
+            defaultextension=".xlsx",
+            initialfile=f"zikr-export-{day}.xlsx",
+            filetypes=[("Excel fayl", "*.xlsx")],
+        )
+
+        if not output_path:
+            return
+
+        try:
+            write_simple_xlsx(
+                headers=["Nomi", "Zikr matni", "Kunlik miqdor", "Bugungi sanoq", "Progress", "Sana"],
+                rows=rows,
+                output_path=output_path,
+            )
+            messagebox.showinfo("Muvaffaqiyat", f"Excel export tayyor: {output_path}")
+        except Exception as exc:
+            messagebox.showerror("Xatolik", f"Exportda xatolik yuz berdi: {exc}")
 
     def _on_select(self, _event=None):
         selected = self.tree.selection()

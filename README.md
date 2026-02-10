@@ -6,6 +6,7 @@ Bu loyiha kundalik zikrlarni kompyuterda GUI (oyna) orqali boshqarish uchun tayy
 - Zikr qo'shish: **nomi**, **uzun matni**, **kunlik miqdori**
 - Zikrni tahrirlash va o'chirish
 - Har bir zikr uchun bugungi progressni yuritish (`+1`, `+5`, `Reset`)
+- Zikrlarni joriy holatda **Excel (`.xlsx`)** ga export qilish
 - Ma'lumotlarni lokal SQLite bazaga saqlash (`zikr_desktop.db`)
 
 ## Ishga tushirish
