@@ -2,10 +2,12 @@ import json
 import shutil
 import subprocess
 import sys
+import zipfile
 from datetime import datetime
 from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
+from xml.sax.saxutils import escape, quoteattr
 
 DATA_FILE = Path("kundalik_entries.json")
 UPLOADS_DIR = Path("kundalik_uploads")
@@ -15,7 +17,7 @@ class KundalikApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title("Ish Kundaligi")
-        self.root.geometry("1020x560")
+        self.root.geometry("1080x560")
 
         self.current_attachment: Path | None = None
         UPLOADS_DIR.mkdir(exist_ok=True)
@@ -59,6 +61,7 @@ class KundalikApp:
         tk.Button(button_row, text="Saqlash", command=self.save_entry, width=14).pack(side="left")
         tk.Button(button_row, text="Tanlanganni o'chirish", command=self.delete_entry, width=20).pack(side="left", padx=8)
         tk.Button(button_row, text="Tanlangan yozuv faylini ochish", command=self.open_selected_entry_attachment, width=28).pack(side="left", padx=8)
+        tk.Button(button_row, text="Excelga eksport", command=self.export_to_excel, width=16).pack(side="left", padx=8)
         tk.Button(button_row, text="Tozalash", command=self.clear_form, width=12).pack(side="left")
 
         table_frame = tk.Frame(self.root, padx=12, pady=8)
@@ -76,7 +79,7 @@ class KundalikApp:
         self.table.column("project", width=170)
         self.table.column("hours", width=90, anchor="center")
         self.table.column("task", width=420)
-        self.table.column("attachment", width=180)
+        self.table.column("attachment", width=210)
 
         y_scroll = ttk.Scrollbar(table_frame, orient="vertical", command=self.table.yview)
         self.table.configure(yscroll=y_scroll.set)
@@ -181,6 +184,178 @@ class KundalikApp:
             return
 
         self._open_file(Path(attachment_path))
+
+    def export_to_excel(self) -> None:
+        if not self.entries:
+            messagebox.showinfo("Ma'lumot", "Eksport qilish uchun avval kamida bitta yozuv kiriting.")
+            return
+
+        save_path_text = filedialog.asksaveasfilename(
+            title="Excel faylni saqlash",
+            defaultextension=".xlsx",
+            filetypes=[("Excel Workbook", "*.xlsx")],
+            initialfile=f"kundalik_{datetime.now().strftime('%Y%m%d')}.xlsx",
+        )
+        if not save_path_text:
+            return
+
+        save_path = Path(save_path_text)
+        attachments_export_dir = save_path.parent / f"{save_path.stem}_files"
+        attachments_export_dir.mkdir(exist_ok=True)
+
+        rows: list[dict] = []
+        for index, entry in enumerate(self.entries, start=1):
+            attachment_name = ""
+            hyperlink_target = ""
+
+            attachment_path = entry.get("attachment", "")
+            if attachment_path:
+                source_attachment = Path(attachment_path)
+                if source_attachment.exists():
+                    copied_name = f"{index:03d}_{source_attachment.name}"
+                    copied_path = attachments_export_dir / copied_name
+                    try:
+                        shutil.copy2(source_attachment, copied_path)
+                        attachment_name = copied_name
+                        hyperlink_target = str(Path(attachments_export_dir.name) / copied_name)
+                    except OSError:
+                        attachment_name = "Nusxalab bo'lmadi"
+                else:
+                    attachment_name = "Fayl topilmadi"
+
+            rows.append(
+                {
+                    "date": str(entry.get("date", "")),
+                    "project": str(entry.get("project", "")),
+                    "hours": float(entry.get("hours", 0)),
+                    "task": str(entry.get("task", "")),
+                    "attachment_name": attachment_name,
+                    "hyperlink": hyperlink_target,
+                }
+            )
+
+        try:
+            self._write_xlsx(save_path, rows)
+        except OSError as error:
+            messagebox.showerror("Xato", f"Excelga eksportda xatolik: {error}")
+            return
+
+        messagebox.showinfo(
+            "Muvaffaqiyat",
+            f"Excel saqlandi:\n{save_path}\n\nBiriktirilgan fayllar papkasi:\n{attachments_export_dir}",
+        )
+
+    def _write_xlsx(self, path: Path, rows: list[dict]) -> None:
+        headers = ["Sana", "Loyiha", "Soat", "Tafsilot", "Biriktirilgan fayl"]
+        max_row = len(rows) + 1
+
+        rel_items: list[str] = []
+        hyperlink_items: list[str] = []
+        rel_counter = 1
+
+        sheet_rows: list[str] = []
+        header_cells = "".join(
+            f'<c r="{col}1" t="inlineStr"><is><t>{escape(text)}</t></is></c>'
+            for col, text in zip(["A", "B", "C", "D", "E"], headers)
+        )
+        sheet_rows.append(f'<row r="1">{header_cells}</row>')
+
+        for row_no, row in enumerate(rows, start=2):
+            date_cell = f'<c r="A{row_no}" t="inlineStr"><is><t>{escape(row["date"])}</t></is></c>'
+            project_cell = f'<c r="B{row_no}" t="inlineStr"><is><t>{escape(row["project"])}</t></is></c>'
+            hours_cell = f'<c r="C{row_no}"><v>{row["hours"]}</v></c>'
+            task_cell = f'<c r="D{row_no}" t="inlineStr"><is><t>{escape(row["task"])}</t></is></c>'
+            attachment_text = row["attachment_name"] if row["attachment_name"] else "-"
+            attachment_cell = f'<c r="E{row_no}" t="inlineStr"><is><t>{escape(attachment_text)}</t></is></c>'
+
+            sheet_rows.append(f'<row r="{row_no}">{date_cell}{project_cell}{hours_cell}{task_cell}{attachment_cell}</row>')
+
+            if row["hyperlink"]:
+                rel_id = f"rId{rel_counter}"
+                rel_counter += 1
+                target = quoteattr(row["hyperlink"])
+                rel_items.append(
+                    f'<Relationship Id="{rel_id}" '
+                    'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" '
+                    f'Target={target} TargetMode="External"/>'
+                )
+                hyperlink_items.append(f'<hyperlink ref="E{row_no}" r:id="{rel_id}"/>')
+
+        sheet_data_xml = "".join(sheet_rows)
+        hyperlinks_xml = f"<hyperlinks>{''.join(hyperlink_items)}</hyperlinks>" if hyperlink_items else ""
+
+        sheet_xml = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+            'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+            f'<dimension ref="A1:E{max_row}"/>'
+            '<sheetViews><sheetView workbookViewId="0"/></sheetViews>'
+            '<sheetFormatPr defaultRowHeight="15"/>'
+            '<cols>'
+            '<col min="1" max="1" width="14" customWidth="1"/>'
+            '<col min="2" max="2" width="24" customWidth="1"/>'
+            '<col min="3" max="3" width="10" customWidth="1"/>'
+            '<col min="4" max="4" width="60" customWidth="1"/>'
+            '<col min="5" max="5" width="35" customWidth="1"/>'
+            '</cols>'
+            f'<sheetData>{sheet_data_xml}</sheetData>'
+            f'{hyperlinks_xml}'
+            '</worksheet>'
+        )
+
+        sheet_rels_xml = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            f'{"".join(rel_items)}'
+            '</Relationships>'
+        )
+
+        workbook_xml = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+            'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+            '<sheets><sheet name="Kundalik" sheetId="1" r:id="rId1"/></sheets>'
+            '</workbook>'
+        )
+
+        workbook_rels_xml = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" '
+            'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" '
+            'Target="worksheets/sheet1.xml"/>'
+            '</Relationships>'
+        )
+
+        root_rels_xml = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" '
+            'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" '
+            'Target="xl/workbook.xml"/>'
+            '</Relationships>'
+        )
+
+        content_types_xml = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+            '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+            '<Default Extension="xml" ContentType="application/xml"/>'
+            '<Override PartName="/xl/workbook.xml" '
+            'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+            '<Override PartName="/xl/worksheets/sheet1.xml" '
+            'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+            '</Types>'
+        )
+
+        with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as xlsx_zip:
+            xlsx_zip.writestr("[Content_Types].xml", content_types_xml)
+            xlsx_zip.writestr("_rels/.rels", root_rels_xml)
+            xlsx_zip.writestr("xl/workbook.xml", workbook_xml)
+            xlsx_zip.writestr("xl/_rels/workbook.xml.rels", workbook_rels_xml)
+            xlsx_zip.writestr("xl/worksheets/sheet1.xml", sheet_xml)
+            if rel_items:
+                xlsx_zip.writestr("xl/worksheets/_rels/sheet1.xml.rels", sheet_rels_xml)
 
     def _open_file(self, path: Path) -> None:
         if not path.exists():
