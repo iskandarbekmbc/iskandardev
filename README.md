@@ -16,6 +16,14 @@ Talab: Python 3.10+ (standart kutubxonalar yetarli).
 python3 app.py
 ```
 
+## Windows uchun EXE va installer
+- EXE build: `scripts\build_windows_exe.bat`
+- Installer build yo'riqnomasi: `docs/windows-exe-build.md`
+- Inno Setup script: `installer/zikr_setup.iss`
+
 ## Fayllar
 - `app.py` — asosiy Tkinter GUI dasturi
 - `docs/desktop-app-spec.md` — desktop loyiha tavsifi
+- `docs/windows-exe-build.md` — `.exe` va `Setup.exe` build qadamlari
+- `scripts/build_windows_exe.bat` — PyInstaller build skripti
+- `installer/zikr_setup.iss` — Windows installer skripti

@@ -15,6 +15,9 @@ Mobil o'rniga kompyuterda ishlaydigan GUI dastur: foydalanuvchi zikr nomi, zikr 
    - Barcha zikrlar joriy holati (`Nomi`, `Zikr matni`, `Kunlik miqdor`, `Bugungi sanoq`, `Progress`, `Sana`) bilan `.xlsx` faylga chiqariladi
 4. **Lokal saqlash**
    - SQLite bazada saqlanadi
+5. **Windows distributiv**
+   - Dastur `.exe` formatda build qilinadi
+   - O'rnatish uchun `Setup.exe` installer tayyorlanadi
 
 ## GUI tarkibi
 - Chap panel: zikrlar ro'yxati (`Nomi`, `Miqdor`, `Bugun`)
